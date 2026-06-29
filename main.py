@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-main.py — Servidor de Baro v3.0.
-FastAPI + WebSockets. Ahora incluye el saludo automático de bienvenida.
+main.py — Servidor de Baro v4.0 (Motor ML propio).
+FastAPI + WebSockets. Cerebro con red neuronal MLP entrenada localmente.
 """
 
 from __future__ import annotations
@@ -17,13 +17,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from brain import BaroBrain
+from ml_brain import BaroBrain
 from voice import synthesize, VOICES, DEFAULT_VOICE
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("baro")
 
-app = FastAPI(title="Baro API", version="3.0.0")
+app = FastAPI(title="Baro API", version="4.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,16 +36,16 @@ app.add_middleware(
 FRONTEND_DIR = Path(__file__).resolve().parent
 
 WELCOME_GREETINGS = [
-    "¡Hola! Soy Baro, tu asistente inteligente. Ya estoy escuchando. Solo di oye Baro y luego tu pregunta.",
-    "¡Hola! Baro lista y activada. Di oye Baro seguido de tu pregunta y te respondo al instante.",
-    "¡Hola! Aquí estoy. Soy Baro. Para hablar conmigo, di oye Baro y luego lo que necesitas.",
-    "¡Hola de nuevo! Soy Baro. Di oye Baro cuando quieras hablar y te escucho de inmediato.",
+    "¡Hola! Soy Baro, tu asistente con inteligencia artificial propia. Ya estoy escuchando. Di 'Oye Baro' y luego tu pregunta.",
+    "¡Hola! Baro lista y activada. Mi cerebro neuronal está entrenado y listo. Di 'Oye Baro' para activarme.",
+    "¡Hola! Aquí estoy. Soy Baro, con motor de IA propio sin dependencias externas. ¿Qué necesitas?",
+    "¡Hola de nuevo! Soy Baro v4.0. Mi red neuronal está lista. Di 'Oye Baro' cuando quieras hablar.",
 ]
 
 
-# --------------------------------------------------------------------------- #
-# Modelos
-# --------------------------------------------------------------------------- #
+# ─────────────────────────────────────────────────────────────── #
+# Modelos Pydantic                                                 #
+# ─────────────────────────────────────────────────────────────── #
 
 class ChatRequest(BaseModel):
     message: str
@@ -60,13 +60,13 @@ class ChatResponse(BaseModel):
     audio_base64: str | None = None
 
 
-# --------------------------------------------------------------------------- #
-# Endpoints REST
-# --------------------------------------------------------------------------- #
+# ─────────────────────────────────────────────────────────────── #
+# Endpoints REST                                                   #
+# ─────────────────────────────────────────────────────────────── #
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "baro", "version": "3.0.0"}
+    return {"status": "ok", "service": "baro", "version": "4.0.0", "engine": "neural-ml"}
 
 
 @app.get("/api/voices")
@@ -76,7 +76,7 @@ async def list_voices():
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
-    # Saludo de bienvenida automático (petición especial del frontend)
+    # Saludo de bienvenida automático
     if req.message == "saludo_inicial_baro_v3":
         greeting_text = random.choice(WELCOME_GREETINGS)
         audio_b64 = None
@@ -112,9 +112,9 @@ async def chat(req: ChatRequest):
     )
 
 
-# --------------------------------------------------------------------------- #
-# WebSocket
-# --------------------------------------------------------------------------- #
+# ─────────────────────────────────────────────────────────────── #
+# WebSocket                                                        #
+# ─────────────────────────────────────────────────────────────── #
 
 class ConnectionManager:
     def __init__(self) -> None:
@@ -142,7 +142,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         await websocket.send_json({
             "type": "ready",
-            "text": "Baro conectada y lista.",
+            "text": "Baro v4.0 conectada — motor neuronal activo.",
         })
 
         while True:
@@ -187,9 +187,9 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 
-# --------------------------------------------------------------------------- #
-# Servir frontend estático
-# --------------------------------------------------------------------------- #
+# ─────────────────────────────────────────────────────────────── #
+# Frontend estático                                                #
+# ─────────────────────────────────────────────────────────────── #
 
 @app.get("/")
 async def serve_index():
