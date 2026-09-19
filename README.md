@@ -3,6 +3,22 @@
 Baro es tu propio asistente de IA, con voz en tiempo real, hecho 100% con
 tecnología propia (sin depender de OpenAI, Gemini ni ninguna IA externa).
 
+## 🧠 baro-1 — nuestro propio modelo
+
+Baro corre sobre **baro-1 v1.0.0**, nuestro modelo neuronal de intenciones en
+español, entrenado por nosotros:
+
+- **Arquitectura:** TF-IDF de caracteres (6,000 features) + MLP (256×128)
+- **Entrenamiento:** 40,574 ejemplos etiquetados, 62 intenciones
+- **Evaluación:** 98.9% accuracy en datos reservados
+- **Datos reales:** 16,521 frases en español del dataset Amazon MASSIVE
+- **Conocimiento:** 184 capitales, 118 elementos químicos, 3,720 datos de
+  250 países (moneda, idioma, región, superficie), 301 traducciones EN→ES,
+  chistes, refranes, citas, poemas, recetas y más
+- **Release:** `baro-model/` — pesos (`model.pkl`), `config.json`,
+  vocabulario, model card (`README.md`) y licencia MIT, estilo releases
+  open-source
+
 ## Estructura del proyecto
 
 Todos los archivos viven juntos, en una sola carpeta (sin subcarpetas):

@@ -54,9 +54,19 @@ from calculator import (
 )
 from markov_gen import generate_for_intent
 
+try:
+    import knowledge as K
+    HAS_KNOWLEDGE = True
+except ImportError:
+    K = None
+    HAS_KNOWLEDGE = False
+
 logger = logging.getLogger("baro.ml")
 
-MODEL_PATH = "baro_neural_model.pkl"
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(_BASE_DIR, "baro-model", "model.pkl")
+# Compatibilidad: si existe el pickle antiguo en la raíz, usarlo
+_LEGACY_MODEL_PATH = os.path.join(_BASE_DIR, "baro_neural_model.pkl")
 CONFIDENCE_THRESHOLD = 0.30
 
 
@@ -134,7 +144,7 @@ class BaroNeuralEngine:
             activation="relu",
             solver="adam",
             alpha=0.001,
-            batch_size=32,
+            batch_size=128,
             learning_rate="adaptive",
             max_iter=300,
             random_state=42,
@@ -144,14 +154,16 @@ class BaroNeuralEngine:
         return Pipeline([("tfidf", char_tfidf), ("clf", mlp)])
 
     def _load_or_train(self) -> None:
-        if os.path.exists(MODEL_PATH):
-            try:
-                with open(MODEL_PATH, "rb") as f:
-                    self.pipeline, self.label_encoder = pickle.load(f)
-                logger.info("Modelo neuronal cargado desde disco.")
-                return
-            except Exception as e:
-                logger.warning("No se pudo cargar modelo: %s. Reentrenando...", e)
+        # 1) release oficial 2) pickle legacy en la raíz 3) entrenar
+        for path in (MODEL_PATH, _LEGACY_MODEL_PATH):
+            if os.path.exists(path):
+                try:
+                    with open(path, "rb") as f:
+                        self.pipeline, self.label_encoder = pickle.load(f)
+                    logger.info("Modelo neuronal cargado desde %s.", path)
+                    return
+                except Exception as e:
+                    logger.warning("No se pudo cargar modelo %s: %s. Reentrenando...", path, e)
 
         self._train()
 
@@ -169,6 +181,7 @@ class BaroNeuralEngine:
         self.pipeline.fit(texts, y)
 
         try:
+            os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
             with open(MODEL_PATH, "wb") as f:
                 pickle.dump((self.pipeline, self.label_encoder), f)
             logger.info("Modelo guardado en %s", MODEL_PATH)
@@ -791,6 +804,60 @@ RESPONSES: dict[str, list[str]] = {
         "¡Toc toc! ¿Quién es? Anda, cuéntame el chiste, que los amo con todo el corazón. 😄",
         "¡Llamando a la puerta digital! Cuéntame tu toc toc, estoy lista para reír.",
     ],
+    # ── Nuevas intenciones (base de conocimiento) ────────────────
+    "capital": [
+        "Puedo decirte la capital de casi cualquier país. Pregúntame, por ejemplo: '¿cuál es la capital de Japón?'",
+    ],
+    "chemistry": [
+        "Conozco los 118 elementos de la tabla periódica: símbolos y números atómicos. Pregúntame, por ejemplo: '¿cuál es el símbolo del oro?'",
+    ],
+    "translation": [
+        "Puedo traducir palabras del inglés al español. Prueba: '¿cómo se dice dog en español?'",
+    ],
+    "definition": [
+        "Puedo explicarte conceptos de ciencia, historia, tecnología y más. Pregúntame 'qué es...' o 'quién fue...'.",
+    ],
+    "proverb": [
+        "Dice el refrán: no hay mal que dure cien años.",
+    ],
+    "quote": [
+        "Como decía Einstein: la imaginación es más importante que el conocimiento.",
+    ],
+    "story": [
+        "Me encantan los cuentos. Pídeme 'cuéntame un cuento' y te narro uno.",
+    ],
+    "poem": [
+        "Puedo escribirte versos. Pídeme 'escríbeme un poema'.",
+    ],
+    "recipe": [
+        "Tengo recetas de todo tipo. Pídeme 'dame una receta' o una específica.",
+    ],
+    "advice": [
+        "Claro, te doy un consejo: los hábitos pequeños y constantes vencen a la motivación pasajera.",
+    ],
+    "exercise": [
+        "Puedo darte rutinas de ejercicio para casa. Pídeme 'una rutina de ejercicio'.",
+    ],
+    "study": [
+        "Puedo enseñarte técnicas de estudio probadas. Pídeme 'cómo estudiar mejor'.",
+    ],
+    # ── Intenciones desde datos externos (MASSIVE) ───────────────
+    "alarm": [
+        "No puedo programar alarmas en tu dispositivo, pero dime qué necesitas recordar y te ayudo a organizarlo. ⏰",
+        "Las alarmas del teléfono las pones tú, pero si me dices la hora y el motivo te lo dejo anotado aquí en el chat. ⏰",
+    ],
+    "calendar": [
+        "No tengo acceso a tu calendario, pero dime el evento y la fecha y te ayudo a redactarlo o a no olvidarlo. 📅",
+        "Puedo ayudarte a planear: dime qué evento quieres agendar y cuándo. 📅",
+    ],
+    "email": [
+        "No puedo enviar correos por ti, pero te ayudo a redactarlo: dime a quién va dirigido y qué quieres decir. ✉️",
+        "Dime qué necesitas comunicar y te escribo un borrador de correo listo para enviar. ✉️",
+    ],
+    "social": [
+        "No puedo publicar ni enviar mensajes por ti, pero te ayudo a redactar lo que quieras decir. 💬",
+        "Dime qué mensaje quieres enviar y a quién, y te lo redacto perfecto. 💬",
+    ],
 }
 
 FALLBACK_RESPONSES = [
@@ -904,6 +971,13 @@ class BaroBrain:
         if advanced:
             return advanced
 
+        # ── Prioridad 3.5: Base de conocimiento factual ─────────────
+        # Respuestas deterministas (capitales, química, traducción,
+        # cultura general) antes de la clasificación neuronal.
+        kb = self._handle_knowledge(raw_text)
+        if kb:
+            return kb
+
         # ── Clasificación neuronal ────────────────────────────────
         intent, confidence = self.engine.predict(raw_text)
         top_k = self.engine.predict_top_k(raw_text, k=3)
@@ -922,6 +996,58 @@ class BaroBrain:
 
         # ── Despachar a handler especializado ────────────────────
         return await self._dispatch(intent, text_norm, raw_text)
+
+    def _handle_knowledge(self, raw_text: str) -> Optional[BrainResponse]:
+        """Respuestas factuales deterministas desde knowledge.py."""
+        if not HAS_KNOWLEDGE:
+            return None
+        ans = K.answer_capital(raw_text)
+        if ans:
+            return self._finish("capital", ans)
+        ans = K.answer_element(raw_text)
+        if ans:
+            return self._finish("chemistry", ans)
+        ans = K.translate_word(raw_text)
+        if ans:
+            return self._finish("translation", ans)
+        ans = K.answer_knowledge(raw_text)
+        if ans:
+            return self._finish("definition", ans)
+        return None
+
+    def _handle_recipe(self, text_norm: str) -> BrainResponse:
+        if HAS_KNOWLEDGE:
+            norm = K._norm_es(text_norm)
+            for name, recipe in K.RECIPES:
+                if K._norm_es(name) in norm:
+                    return self._finish("recipe",
+                                        f"**{name}**: {recipe}")
+            name, recipe = random.choice(K.RECIPES)
+            return self._finish("recipe",
+                                f"Te comparto una receta: **{name}**: {recipe}")
+        return self._finish("recipe", pick("recipe"))
+
+    def _handle_advice(self, text_norm: str) -> BrainResponse:
+        if HAS_KNOWLEDGE:
+            norm = K._norm_es(text_norm)
+            topic_map = {
+                "estudi": "estudio", "examen": "estudio", "escuela": "estudio",
+                "salud": "salud", "dormir": "salud", "comida": "salud",
+                "dinero": "dinero", "ahorro": "dinero", "plata": "dinero",
+                "trabajo": "trabajo", "empleo": "trabajo", "jefe": "trabajo",
+                "amor": "amor", "pareja": "amor", "novio": "amor", "novia": "amor",
+                "animo": "animo", "triste": "animo", "deprim": "animo",
+                "cocina": "cocina", "cocinar": "cocina",
+                "viaj": "viaje", "tecnolog": "tecnologia", "celular": "tecnologia",
+                "productiv": "productividad",
+            }
+            for key, topic in topic_map.items():
+                if key in norm:
+                    opts = [a for t, a in K.ADVICE if t == topic]
+                    if opts:
+                        return self._finish("advice", random.choice(opts))
+            return self._finish("advice", random.choice(K.ADVICE)[1])
+        return self._finish("advice", pick("advice"))
 
     async def _dispatch(self, intent: str, text_norm: str, raw_text: str) -> BrainResponse:
         """Enruta la intención al handler correcto."""
@@ -947,6 +1073,36 @@ class BaroBrain:
             if self.ctx.last_response:
                 return self._finish("repeat", self.ctx.last_response)
             return self._finish("repeat", "No tengo nada que repetir aún.")
+
+        # ── Intenciones servidas por la base de conocimiento ──────
+        if HAS_KNOWLEDGE:
+            if intent == "joke":
+                return self._finish("joke", random.choice(K.JOKES))
+            if intent == "curiosity":
+                return self._finish("curiosity", random.choice(K.CURIOSITIES))
+            if intent == "riddle":
+                r, a = random.choice(K.RIDDLES)
+                return self._finish("riddle", f"{r}\n\n¿Te rindes? La respuesta es: **{a}**.")
+            if intent == "proverb":
+                return self._finish("proverb",
+                                    f"Dice el refrán: *{random.choice(K.PROVERBS)}*")
+            if intent == "quote":
+                q, author = random.choice(K.QUOTES)
+                return self._finish("quote", f"*\"{q}\"* — **{author}**")
+            if intent == "story":
+                title, story = random.choice(K.STORIES)
+                return self._finish("story", f"**{title}**\n\n{story}")
+            if intent == "poem":
+                title, poem = random.choice(K.POEMS)
+                return self._finish("poem", f"**{title}**\n\n{poem}")
+            if intent == "recipe":
+                return self._handle_recipe(text_norm)
+            if intent == "advice":
+                return self._handle_advice(text_norm)
+            if intent == "exercise":
+                return self._finish("exercise", random.choice(K.EXERCISE_ROUTINES))
+            if intent == "study":
+                return self._finish("study", random.choice(K.STUDY_TECHNIQUES))
 
         # Para todo lo demás, responder con el banco + Markov
         response_text = pick(intent)
